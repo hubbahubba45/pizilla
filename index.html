@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pizilla Pi Challenge</title>
+    <link rel="icon" href="pizilla.png" type="image/png">
     <style>
         * {
             margin: 0;
@@ -115,6 +116,7 @@
             font-size: 1.5rem;
             font-weight: bold;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 20;
         }
         
         #highscore-container {
@@ -127,6 +129,7 @@
             font-size: 1.5rem;
             font-weight: bold;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 20;
         }
         
         #target-container {
@@ -139,6 +142,7 @@
             font-size: 1.5rem;
             font-weight: bold;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 20;
         }
         
         #pi-progress {
@@ -154,6 +158,20 @@
             text-overflow: ellipsis;
             white-space: nowrap;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 20;
+        }
+        
+        #timer-container {
+            position: absolute;
+            top: 120px;
+            left: 20px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 20;
         }
         
         #city {
@@ -161,7 +179,7 @@
             bottom: 0;
             width: 100%;
             height: 150px;
-            background-image: url('/api/placeholder/800/150');
+            background-image: url('mountain.svg');
             background-size: cover;
             background-repeat: repeat-x;
         }
@@ -205,6 +223,24 @@
         #discord-button:hover {
             background-color: #4752C4;
         }
+        
+        #game-mode-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 20px;
+        }
+        
+        .mode-button {
+            margin: 5px;
+            background-color: #0088cc;
+            box-shadow: 0 4px 0 #006699;
+        }
+        
+        .mode-button:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #006699;
+        }
 
         @media (max-width: 768px) {
             h1 {
@@ -216,7 +252,7 @@
                 font-size: 1.2rem;
             }
             
-            #score-container, #target-container, #highscore-container {
+            #score-container, #target-container, #highscore-container, #timer-container {
                 font-size: 1.2rem;
                 padding: 8px 16px;
             }
@@ -228,6 +264,10 @@
             
             #highscore-container {
                 top: 60px;
+            }
+            
+            #timer-container {
+                top: 100px;
             }
         }
 
@@ -247,6 +287,10 @@
             #highscore-container {
                 top: 50px;
             }
+            
+            #timer-container {
+                top: 90px;
+            }
         }
     </style>
 </head>
@@ -257,7 +301,12 @@
             <p>Help Pizilla collect the digits of π in the correct order!</p>
             <p>Start with 3, then 1, then 4, then 1, then 5, and so on...</p>
             <p>Tap and drag Pizilla to move around</p>
-            <button id="start-button">START GAME</button>
+            
+            <div id="game-mode-container">
+                <p>Select a game mode:</p>
+                <button id="endless-mode" class="mode-button">ENDLESS MODE</button>
+                <button id="timed-mode" class="mode-button">π TIME CHALLENGE (3:14)</button>
+            </div>
         </div>
         
         <div id="game-over-screen" style="display: none;">
@@ -272,6 +321,7 @@
         <div id="highscore-container">Best: <span id="highscore">0</span> digits</div>
         <div id="target-container">Next π digit: <span id="target-number">3</span></div>
         <div id="pi-progress">π = <span id="pi-collected">3.</span></div>
+        <div id="timer-container" style="display: none;">Time: <span id="timer">3:14</span></div>
         
         <a id="discord-button" href="https://discord.gg/69launches" target="_blank">Join our Discord!</a>
         
@@ -288,7 +338,8 @@
         let piIndex = 0;
         let targetNumber = 0;
         let digitsCollected = 0;
-        let highScore = localStorage.getItem('piHighScore') ? parseInt(localStorage.getItem('piHighScore')) : 0;
+        let highScoreEndless = localStorage.getItem('piHighScoreEndless') ? parseInt(localStorage.getItem('piHighScoreEndless')) : 0;
+        let highScoreTimed = localStorage.getItem('piHighScoreTimed') ? parseInt(localStorage.getItem('piHighScoreTimed')) : 0;
         let gameActive = false;
         let pizillaX = 0;
         let pizillaY = 0;
@@ -298,6 +349,13 @@
         let gameWidth = 0;
         let gameHeight = 0;
         let touchId = null;
+        let gameMode = '';
+        let timerValue = 194; // 3 minutes and 14 seconds
+        let timerInterval = null;
+        let safeZones = [];
+
+        let lastCollisionTime = 0;
+        const collisionCooldown = 500; // milliseconds
         
         // DOM elements
         const gameContainer = document.getElementById('game-container');
@@ -311,15 +369,15 @@
         const finalScoreElement = document.getElementById('final-score');
         const piDigitsFoundElement = document.getElementById('pi-digits-found');
         const highScoreDisplay = document.getElementById('high-score');
-        const startButton = document.getElementById('start-button');
         const restartButton = document.getElementById('restart-button');
+        const endlessModeButton = document.getElementById('endless-mode');
+        const timedModeButton = document.getElementById('timed-mode');
+        const timerContainer = document.getElementById('timer-container');
+        const timerElement = document.getElementById('timer');
         const discordButton = document.getElementById('discord-button');
-        
-        // Set Pizilla's background image (using the local file)
+
+        // Set Pizilla's background image
         pizilla.style.backgroundImage = "url('pizilla.png')";
-        
-        // Update highscore display
-        highScoreElement.textContent = highScore;
         
         // Initialize game
         function initGame() {
@@ -332,8 +390,15 @@
             updatePizillaPosition();
             
             // Add event listeners
-            startButton.addEventListener('click', startGame);
-            restartButton.addEventListener('click', startGame);
+            endlessModeButton.addEventListener('click', () => startGame('endless'));
+            timedModeButton.addEventListener('click', () => startGame('timed'));
+            restartButton.addEventListener('click', () => {
+                if (gameMode === 'endless') {
+                    startGame('endless');
+                } else {
+                    startGame('timed');
+                }
+            });
             
             // Touch and mouse event listeners for Pizilla
             pizilla.addEventListener('mousedown', startDrag);
@@ -354,11 +419,103 @@
                 pizillaX = Math.min(Math.max(pizillaX, 0), gameWidth - 100);
                 pizillaY = Math.min(Math.max(pizillaY, 0), gameHeight - 100);
                 updatePizillaPosition();
+                
+                // Update safe zones
+                updateSafeZones();
             });
         }
         
+        // Update safe zones (areas where numbers shouldn't spawn)
+        function updateSafeZones() {
+            safeZones = [
+                { // Score container
+                    x: gameWidth - 200, 
+                    y: 0, 
+                    width: 200, 
+                    height: 60
+                },
+                { // Highscore container
+                    x: gameWidth - 200, 
+                    y: 50, 
+                    width: 200, 
+                    height: 60
+                },
+                { // Target container
+                    x: 0, 
+                    y: 0, 
+                    width: 200, 
+                    height: 60
+                },
+                { // Pi progress
+                    x: 0, 
+                    y: 50, 
+                    width: 200, 
+                    height: 60
+                },
+                { // Timer (when visible)
+                    x: 0, 
+                    y: 100, 
+                    width: 200, 
+                    height: 60
+                }
+            ];
+        }
+        
+        // Check if a position is in a safe zone
+        function isInSafeZone(x, y, width, height) {
+            for (const zone of safeZones) {
+                if (x < zone.x + zone.width && 
+                    x + width > zone.x && 
+                    y < zone.y + zone.height && 
+                    y + height > zone.y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Check if a position overlaps with existing numbers
+        function overlapsWithExistingNumbers(x, y, width, height) {
+            const numbers = document.querySelectorAll('.number');
+            for (const number of numbers) {
+                const rect = number.getBoundingClientRect();
+                const offsetRect = {
+                    left: rect.left - gameContainer.getBoundingClientRect().left,
+                    top: rect.top - gameContainer.getBoundingClientRect().top,
+                    width: rect.width,
+                    height: rect.height
+                };
+                
+                if (x < offsetRect.left + offsetRect.width && 
+                    x + width > offsetRect.left && 
+                    y < offsetRect.top + offsetRect.height && 
+                    y + height > offsetRect.top) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Format the timer value
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            return `${minutes}:${remainingSeconds < 10 ? '0' : ''}${remainingSeconds}`;
+        }
+        
+        // Update the timer
+        function updateTimer() {
+            timerValue--;
+            timerElement.textContent = formatTime(timerValue);
+            
+            if (timerValue <= 0) {
+                endGame();
+            }
+        }
+        
         // Start the game
-        function startGame() {
+        function startGame(mode) {
+            gameMode = mode;
             score = 0;
             piIndex = 0;
             digitsCollected = 0;
@@ -371,18 +528,53 @@
             // Reset Pi collection display
             piCollectedElement.textContent = "3.";
             
+            // Set up timer for timed mode
+            if (mode === 'timed') {
+                timerValue = 194; // 3:14 in seconds
+                timerElement.textContent = formatTime(timerValue);
+                timerContainer.style.display = 'block';
+                
+                // Display the correct high score
+                highScoreElement.textContent = highScoreTimed;
+            } else {
+                timerContainer.style.display = 'none';
+                
+                // Display the correct high score
+                highScoreElement.textContent = highScoreEndless;
+            }
+            
             // Hide Discord button
             discordButton.style.display = 'none';
             
             // Clear any existing numbers
             document.querySelectorAll('.number').forEach(num => num.remove());
             
-            // Generate initial set of numbers - ensure all 0-9 are present
-            ensureAllDigitsPresent();
+            // Clear any existing timer
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            
+            // Update safe zones
+            updateSafeZones();
+            
+            // Generate initial set of numbers - ensure target number is there
+            // and add a few random ones (not all 0-9)
+            createSpecificNumber(targetNumber);
+            
+            // Add a few random numbers
+            for (let i = 0; i < 6; i++) {
+                createRandomNumber();
+            }
             
             startScreen.style.display = 'none';
             gameOverScreen.style.display = 'none';
             gameActive = true;
+            
+            // Start the timer for timed mode
+            if (mode === 'timed') {
+                timerInterval = setInterval(updateTimer, 1000);
+            }
             
             // Start spawning numbers
             scheduleNextNumberSpawn();
@@ -392,17 +584,30 @@
         function endGame() {
             gameActive = false;
             
-            // Update high score if needed
-            if (digitsCollected > highScore) {
-                highScore = digitsCollected;
-                localStorage.setItem('piHighScore', highScore);
-                highScoreElement.textContent = highScore;
+            // Clear timer
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            
+            // Update high score if needed based on game mode
+            if (gameMode === 'endless') {
+                if (digitsCollected > highScoreEndless) {
+                    highScoreEndless = digitsCollected;
+                    localStorage.setItem('piHighScoreEndless', highScoreEndless);
+                }
+                highScoreDisplay.textContent = `High Score: ${highScoreEndless} digits`;
+            } else {
+                if (digitsCollected > highScoreTimed) {
+                    highScoreTimed = digitsCollected;
+                    localStorage.setItem('piHighScoreTimed', highScoreTimed);
+                }
+                highScoreDisplay.textContent = `High Score: ${highScoreTimed} digits`;
             }
             
             gameOverScreen.style.display = 'flex';
             finalScoreElement.textContent = `Score: ${score}`;
             piDigitsFoundElement.textContent = `You found ${digitsCollected} digits of π`;
-            highScoreDisplay.textContent = `High Score: ${highScore} digits`;
         }
         
         // Set the next target number from Pi
@@ -421,22 +626,6 @@
             ensureDigitExists(targetNumber);
         }
         
-        // Ensure all digits 0-9 are present on screen
-        function ensureAllDigitsPresent() {
-            // Create a set of digits that need to be on screen
-            const digitsNeeded = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-            
-            // Create at least 10 numbers (one for each digit)
-            for (const digit of digitsNeeded) {
-                createSpecificNumber(digit);
-            }
-            
-            // Add a few more random numbers
-            for (let i = 0; i < 5; i++) {
-                createRandomNumber();
-            }
-        }
-        
         // Check if a specific digit exists on screen
         function ensureDigitExists(digit) {
             // Check if the digit is already on screen
@@ -449,20 +638,95 @@
             }
         }
         
+        // Find a valid position for a new number
+        function findValidPosition() {
+            const width = 60;
+            const height = 60;
+            let attempts = 0;
+            let posX, posY;
+            
+            do {
+                posX = Math.random() * (gameWidth - width);
+                posY = Math.random() * (gameHeight - height - 150) + 10; // Keep above the city
+                attempts++;
+                
+                // Prevent infinite loop
+                if (attempts > 50) {
+                    // Find the least crowded area
+                    return findLeastCrowdedPosition(width, height);
+                }
+            } while (
+                isInSafeZone(posX, posY, width, height) || 
+                overlapsWithExistingNumbers(posX, posY, width, height)
+            );
+            
+            return { x: posX, y: posY };
+        }
+        
+        // Find the least crowded position
+        function findLeastCrowdedPosition(width, height) {
+            // Divide the screen into a grid
+            const gridSize = 100;
+            const gridCols = Math.ceil(gameWidth / gridSize);
+            const gridRows = Math.ceil((gameHeight - 150) / gridSize);
+            const grid = Array(gridRows).fill().map(() => Array(gridCols).fill(0));
+            
+            // Count numbers in each grid cell
+            document.querySelectorAll('.number').forEach(number => {
+                const rect = number.getBoundingClientRect();
+                const x = rect.left - gameContainer.getBoundingClientRect().left;
+                const y = rect.top - gameContainer.getBoundingClientRect().top;
+                
+                const col = Math.floor(x / gridSize);
+                const row = Math.floor(y / gridSize);
+                
+                if (col >= 0 && col < gridCols && row >= 0 && row < gridRows) {
+                    grid[row][col]++;
+                }
+            });
+            
+            // Find the cell with the lowest count
+            let minCount = Infinity;
+            let bestRow = 0;
+            let bestCol = 0;
+            
+            for (let row = 0; row < gridRows; row++) {
+                for (let col = 0; col < gridCols; col++) {
+                    // Skip safe zone cells
+                    const cellX = col * gridSize;
+                    const cellY = row * gridSize;
+                    
+                    if (!isInSafeZone(cellX, cellY, gridSize, gridSize) && grid[row][col] < minCount) {
+                        minCount = grid[row][col];
+                        bestRow = row;
+                        bestCol = col;
+                    }
+                }
+            }
+            
+            // Generate a position within the best cell
+            const cellX = bestCol * gridSize;
+            const cellY = bestRow * gridSize;
+            
+            const posX = cellX + Math.random() * (gridSize - width);
+            const posY = cellY + Math.random() * (gridSize - height);
+            
+            return { x: posX, y: posY };
+        }
+        
         // Create a number with a specific digit
         function createSpecificNumber(digit) {
             const number = document.createElement('div');
             number.className = 'number';
             
-            // Random position within the game bounds
-            const posX = Math.random() * (gameWidth - 60);
-            const posY = Math.random() * (gameHeight - 60 - 150) + 10; // Keep above the city
+            // Find a valid position for the number
+            const position = findValidPosition();
             
             number.textContent = digit;
             number.dataset.value = digit;
             
-            number.style.left = `${posX}px`;
-            number.style.top = `${posY}px`;
+            number.style.left = `${position.x}px`;
+            number.style.top = `${position.y}px`;
             
             // Make numbers interactive
             setupNumberInteraction(number);
@@ -475,17 +739,16 @@
             const number = document.createElement('div');
             number.className = 'number';
             
-            // Random position within the game bounds
-            const posX = Math.random() * (gameWidth - 60);
-            const posY = Math.random() * (gameHeight - 60 - 150) + 10; // Keep above the city
+            // Find a valid position for the number
+            const position = findValidPosition();
             
             // Random number value between 0 and 9
             const value = Math.floor(Math.random() * 10);
             number.textContent = value;
             number.dataset.value = value;
             
-            number.style.left = `${posX}px`;
-            number.style.top = `${posY}px`;
+            number.style.left = `${position.x}px`;
+            number.style.top = `${position.y}px`;
             
             // Make numbers interactive
             setupNumberInteraction(number);
@@ -516,7 +779,9 @@
                     }
                     
                     // Update high score display if needed
-                    if (digitsCollected > highScore) {
+                    if (gameMode === 'endless' && digitsCollected > highScoreEndless) {
+                        highScoreElement.textContent = digitsCollected;
+                    } else if (gameMode === 'timed' && digitsCollected > highScoreTimed) {
                         highScoreElement.textContent = digitsCollected;
                     }
                     
@@ -528,9 +793,6 @@
                     // Animation for correct number
                     setTimeout(() => {
                         number.remove();
-                        
-                        // Create a new random number to replace this one
-                        createRandomNumber();
                         
                         // Set next target
                         setNextTargetNumber();
@@ -569,159 +831,78 @@
             const delay = Math.random() * 1000 + baseDelay;
             
             setTimeout(() => {
+                if (!gameActive) return;
+                
                 // Ensure the current target digit exists
                 ensureDigitExists(targetNumber);
                 
-                // Also spawn a new random number
-                createRandomNumber();
-                
-                // Check game over condition - too many numbers
-                const currentNumberCount = document.querySelectorAll('.number').length;
-                if (currentNumberCount > 25) {
-                    endGame();
-                    return;
+                // Limit number of digits on screen to prevent overwhelming the player
+                const numbers = document.querySelectorAll('.number');
+                if (numbers.length < 25) {
+                    createRandomNumber();
                 }
                 
+                // Schedule the next spawn
                 scheduleNextNumberSpawn();
             }, delay);
         }
         
-        // Update Pizilla's position on the screen
-        function updatePizillaPosition() {
-            pizilla.style.left = `${pizillaX}px`;
-            pizilla.style.top = `${pizillaY}px`;
-            checkCollisions();
-        }
-        
-        // Check for collisions between Pizilla and numbers
-        function checkCollisions() {
-            const pizillaBounds = pizilla.getBoundingClientRect();
-            
-            document.querySelectorAll('.number').forEach(number => {
-                const numberBounds = number.getBoundingClientRect();
-                
-                // Check for collision (simple rectangle intersection)
-                if (pizillaBounds.left < numberBounds.right &&
-                    pizillaBounds.right > numberBounds.left &&
-                    pizillaBounds.top < numberBounds.bottom &&
-                    pizillaBounds.bottom > numberBounds.top) {
-                    
-                    // Get the number value
-                    const value = parseInt(number.dataset.value);
-                    
-                    // Only process each collision once
-                    if (!number.classList.contains('correct') && !number.classList.contains('wrong')) {
-                        if (value === targetNumber) {
-                            // Correct collision
-                            number.classList.add('correct');
-                            score += 10;
-                            scoreElement.textContent = score;
-                            digitsCollected++;
-                            
-                            // Update Pi progress
-                            if (piIndex === 0) {
-                                piCollectedElement.textContent = "3.";
-                            } else if (piIndex === 1) {
-                                piCollectedElement.textContent += "1";
-                            } else {
-                                piCollectedElement.textContent += PI_DIGITS.charAt(piIndex);
-                            }
-                            
-                            // Update high score display if needed
-                            if (digitsCollected > highScore) {
-                                highScoreElement.textContent = digitsCollected;
-                            }
-                            
-                            // Check if we've reached 69 digits for Discord button
-                            if (digitsCollected === 69) {
-                                discordButton.style.display = 'block';
-                            }
-                            
-                            // Animation and remove
-                            setTimeout(() => {
-                                number.remove();
-                                
-                                // Create a new random number to replace this one
-                                createRandomNumber();
-                                
-                                // Set a new target
-                                setNextTargetNumber();
-                            }, 500);
-                        } else {
-                            // Wrong collision
-                            number.classList.add('wrong');
-                            score = Math.max(0, score - 5);
-                            scoreElement.textContent = score;
-                            
-                            // Shake animation
-                            let shakeCount = 0;
-                            const shakeInterval = setInterval(() => {
-                                number.style.transform = shakeCount % 2 === 0 ? 'translateX(5px)' : 'translateX(-5px)';
-                                shakeCount++;
-                                if (shakeCount > 6) {
-                                    clearInterval(shakeInterval);
-                                    number.style.transform = 'none';
-                                    
-                                    // Make the number interactive again after shaking
-                                    setTimeout(() => {
-                                        number.classList.remove('wrong');
-                                    }, 500);
-                                }
-                            }, 50);
-                        }
-                    }
-                }
-            });
-        }
-        
-        // Mouse drag handlers
+        // Start and handle dragging (mouse)
         function startDrag(e) {
             if (!gameActive) return;
             
             isDragging = true;
-            const pizillaBounds = pizilla.getBoundingClientRect();
-            dragOffsetX = e.clientX - pizillaBounds.left;
-            dragOffsetY = e.clientY - pizillaBounds.top;
+            dragOffsetX = e.clientX - pizilla.getBoundingClientRect().left;
+            dragOffsetY = e.clientY - pizilla.getBoundingClientRect().top;
             
-            // Prevent default to avoid text selection
+            // Prevent text selection while dragging
             e.preventDefault();
         }
         
         function drag(e) {
             if (!isDragging || !gameActive) return;
             
-            // Update Pizilla's position, keeping it within bounds
-            pizillaX = Math.min(Math.max(e.clientX - dragOffsetX, 0), gameWidth - 100);
-            pizillaY = Math.min(Math.max(e.clientY - dragOffsetY, 0), gameHeight - 100);
+            const containerRect = gameContainer.getBoundingClientRect();
+            
+            // Calculate new position
+            pizillaX = e.clientX - containerRect.left - dragOffsetX;
+            pizillaY = e.clientY - containerRect.top - dragOffsetY;
+            
+            // Keep within bounds
+            pizillaX = Math.min(Math.max(pizillaX, 0), gameWidth - 100);
+            pizillaY = Math.min(Math.max(pizillaY, 0), gameHeight - 100);
             
             updatePizillaPosition();
-            e.preventDefault();
         }
         
         function endDrag() {
             isDragging = false;
         }
         
-        // Touch drag handlers
+        // Start and handle dragging (touch)
         function startDragTouch(e) {
-            if (!gameActive || e.touches.length === 0) return;
+            if (!gameActive) return;
             
-            // Store the ID of the touch we're tracking
-            const touch = e.touches[0];
-            touchId = touch.identifier;
-            
-            isDragging = true;
-            const pizillaBounds = pizilla.getBoundingClientRect();
-            dragOffsetX = touch.clientX - pizillaBounds.left;
-            dragOffsetY = touch.clientY - pizillaBounds.top;
-            
-            e.preventDefault();
+            // Store the touch identifier to track the correct touch
+            if (e.touches.length > 0) {
+                touchId = e.touches[0].identifier;
+                
+                const touch = e.touches[0];
+                const containerRect = gameContainer.getBoundingClientRect();
+                
+                isDragging = true;
+                dragOffsetX = touch.clientX - pizilla.getBoundingClientRect().left;
+                dragOffsetY = touch.clientY - pizilla.getBoundingClientRect().top;
+                
+                // Prevent scrolling while dragging
+                e.preventDefault();
+            }
         }
         
         function dragTouch(e) {
             if (!isDragging || !gameActive) return;
             
-            // Find the touch with the same ID
+            // Find the touch with the stored identifier
             let touch = null;
             for (let i = 0; i < e.touches.length; i++) {
                 if (e.touches[i].identifier === touchId) {
@@ -730,22 +911,96 @@
                 }
             }
             
-            if (!touch) return;
-            
-            // Update Pizilla's position, keeping it within bounds
-            pizillaX = Math.min(Math.max(touch.clientX - dragOffsetX, 0), gameWidth - 100);
-            pizillaY = Math.min(Math.max(touch.clientY - dragOffsetY, 0), gameHeight - 100);
-            
-            updatePizillaPosition();
-            e.preventDefault();
+            if (touch) {
+                const containerRect = gameContainer.getBoundingClientRect();
+                
+                // Calculate new position
+                pizillaX = touch.clientX - containerRect.left - dragOffsetX;
+                pizillaY = touch.clientY - containerRect.top - dragOffsetY;
+                
+                // Keep within bounds
+                pizillaX = Math.min(Math.max(pizillaX, 0), gameWidth - 100);
+                pizillaY = Math.min(Math.max(pizillaY, 0), gameHeight - 100);
+                
+                updatePizillaPosition();
+                
+                // Prevent scrolling
+                e.preventDefault();
+            }
         }
         
-        function endDragTouch() {
-            isDragging = false;
-            touchId = null;
+        function endDragTouch(e) {
+            // Check if the removed touch is the one we're tracking
+            let touchFound = false;
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === touchId) {
+                    touchFound = true;
+                    break;
+                }
+            }
+            
+            if (touchFound) {
+                isDragging = false;
+                touchId = null;
+            }
         }
         
-        // Initialize the game when the DOM is fully loaded
+        // Update Pizilla's position
+        function updatePizillaPosition() {
+            pizilla.style.left = `${pizillaX}px`;
+            pizilla.style.top = `${pizillaY}px`;
+            
+            // Check for collisions with numbers
+            checkNumberCollisions();
+        }
+        
+        // Check for collisions between Pizilla and numbers
+        function checkNumberCollisions() {
+            const pizillaRect = pizilla.getBoundingClientRect();
+            const containerRect = gameContainer.getBoundingClientRect();
+            
+            document.querySelectorAll('.number').forEach(number => {
+                const numberRect = number.getBoundingClientRect();
+                
+                // Convert to game container coordinates
+                const pRect = {
+                    left: pizillaRect.left - containerRect.left,
+                    top: pizillaRect.top - containerRect.top,
+                    right: pizillaRect.right - containerRect.left,
+                    bottom: pizillaRect.bottom - containerRect.top,
+                    width: pizillaRect.width,
+                    height: pizillaRect.height
+                };
+                
+                const nRect = {
+                    left: numberRect.left - containerRect.left,
+                    top: numberRect.top - containerRect.top,
+                    right: numberRect.right - containerRect.left,
+                    bottom: numberRect.bottom - containerRect.top,
+                    width: numberRect.width,
+                    height: numberRect.height
+                };
+                
+                // Check for collision (using smaller hitbox for better UX)
+                const hitboxReduction = 20;
+                if (
+    pRect.left + hitboxReduction < nRect.right - hitboxReduction &&
+    pRect.right - hitboxReduction > nRect.left + hitboxReduction &&
+    pRect.top + hitboxReduction < nRect.bottom - hitboxReduction &&
+    pRect.bottom - hitboxReduction > nRect.top + hitboxReduction
+) {
+    // Only trigger if enough time has passed since last collision
+    const currentTime = Date.now();
+    if (currentTime - lastCollisionTime > collisionCooldown) {
+        lastCollisionTime = currentTime;
+        // Trigger the number's click event
+        number.click();
+    }
+}
+            });
+        }
+        
+        // Initialize the game
         document.addEventListener('DOMContentLoaded', initGame);
     </script>
 </body>
